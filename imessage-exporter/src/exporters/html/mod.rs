@@ -45,6 +45,7 @@ use imessage_database::{
 };
 
 mod balloons;
+mod index;
 mod jumbomoji;
 mod safe;
 mod text_effects;
@@ -119,6 +120,10 @@ impl<'a> MessageWriter<'a> for HTML<'a> {
 
     fn footer_notice() -> Option<&'static str> {
         Some("Writing HTML footers...")
+    }
+
+    fn finish_export(&mut self, _export_error_count: u64) -> Result<(), RuntimeError> {
+        index::write_index(&self.config.options.export_path, &self.state.conversations)
     }
 }
 

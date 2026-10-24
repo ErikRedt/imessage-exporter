@@ -50,6 +50,8 @@ pub struct ExportState {
     pub orphaned_path: PathBuf,
     /// Drives the on-screen progress indicator.
     pub pb: ExportProgress,
+    /// Rendered-message totals and latest timestamps, keyed by transcript filename.
+    pub conversations: HashMap<String, ConversationSummary>,
     /// Message date span per chat file, keyed like [`Self::files`]. Populated
     /// only when `use_message_times` is set.
     spans: HashMap<String, DateSpan>,
@@ -81,6 +83,7 @@ impl ExportState {
             orphaned: Some(BufWriter::with_capacity(FILE_BUFFER_CAPACITY, file)),
             orphaned_path,
             pb: ExportProgress::new(pb_enabled),
+            conversations: HashMap::new(),
             spans: HashMap::new(),
             orphaned_span: None,
         })
@@ -96,6 +99,22 @@ impl ExportState {
     /// Count distinct attachment rows that failed preparation.
     fn missing_attachment_count(&self) -> u64 {
         self.missing_attachments.borrow().len() as u64
+    }
+
+    fn record_rendered_message(&mut self, filename: &str, message: &Message, config: &Config) {
+        let summary = self.conversations.entry(filename.to_string()).or_default();
+        summary.message_count += 1;
+        if let Some(at) = message_timestamp(message)
+            && summary.latest.as_ref().is_none_or(|latest| at > latest.at)
+        {
+            summary.latest = Some(ConversationTimestamp {
+                at,
+                formatted: crate::exporters::shared::time::format_message_date(
+                    message,
+                    &config.options.timezone,
+                ),
+            });
+        }
     }
 
     /// Widen the chat file's span to cover `at`, allocating the key only the
@@ -139,6 +158,19 @@ impl ExportState {
             span.apply(&self.orphaned_path);
         }
     }
+}
+
+/// Summary of one rendered transcript for the HTML export index.
+#[derive(Default)]
+pub struct ConversationSummary {
+    pub message_count: u64,
+    pub latest: Option<ConversationTimestamp>,
+}
+
+/// Latest rendered message in a transcript, including its display text.
+pub struct ConversationTimestamp {
+    pub at: Timestamp,
+    pub formatted: String,
 }
 
 /// Convert the message date into a file-span timestamp.
@@ -197,6 +229,11 @@ pub trait MessageWriter<'a>: MessageFormatter<'a> {
     /// Optional notice printed once before per-file footers are written.
     /// Return `None` to suppress the notice.
     fn footer_notice() -> Option<&'static str>;
+
+    /// Perform a format-specific final write after every transcript is closed.
+    fn finish_export(&mut self, _export_error_count: u64) -> Result<(), RuntimeError> {
+        Ok(())
+    }
 }
 
 /// Resolve the `BufWriter` for `message`, creating the chat file (and writing
@@ -229,7 +266,13 @@ where
             let filename = match state.route.get(&chatroom_rowid) {
                 Some(name) => name.clone(),
                 None => {
-                    let name = config.filename(chatroom);
+                    let mut name = config.filename(chatroom);
+                    // The root HTML index is a reserved archive entry point.
+                    // Preserve a conversation named "index" instead of letting
+                    // the index overwrite its transcript at teardown.
+                    if W::LABEL == "html" && name.eq_ignore_ascii_case("index.html") {
+                        name = "index conversation.html".to_string();
+                    }
                     state.route.insert(chatroom_rowid, name.clone());
                     name
                 }
@@ -237,6 +280,7 @@ where
             if let Some(at) = at {
                 state.record_chat(&filename, at);
             }
+            state.record_rendered_message(&filename, message, config);
             match state.files.entry(filename) {
                 Occupied(entry) => Ok(entry.into_mut()),
                 Vacant(entry) => {
@@ -259,6 +303,13 @@ where
             if let Some(at) = at {
                 state.record_orphaned(at);
             }
+            let filename = state
+                .orphaned_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(ORPHANED)
+                .to_string();
+            state.record_rendered_message(&filename, message, config);
             orphaned_writer(state)
         }
     }
@@ -396,6 +447,7 @@ where
         failures,
         state.missing_attachment_count(),
     )?;
+    writer.finish_export(failures)?;
     if failures > 0 {
         return Err(RuntimeError::IncompleteExport(failures));
     }
@@ -406,7 +458,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::metadata,
+        fs::{metadata, read_to_string},
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -503,6 +555,19 @@ mod tests {
         // Birth time is settable only on macOS and Windows.
         #[cfg(any(target_vendor = "apple", windows))]
         assert_eq!(seconds(metadata.created().unwrap()), earliest);
+    }
+
+    #[test]
+    fn html_export_writes_a_conversation_index() {
+        let options = Options::fake_options(ExportType::Html);
+        let config = Config::fake_app(options);
+
+        let mut exporter = HTML::new(&config).unwrap();
+        run_export(&mut exporter).unwrap();
+
+        let index = read_to_string(config.options.export_path.join("index.html")).unwrap();
+        assert!(index.contains("iMessage Archive"));
+        assert!(index.contains("orphaned.html"));
     }
 
     #[test]
