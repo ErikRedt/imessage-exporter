@@ -22,6 +22,20 @@ The `imessage-exporter` binary exports iMessage data to `txt` or `html` formats.
 
 Installation instructions for the binary are located [here](imessage-exporter/README.md).
 
+## macOS app
+
+The repository includes a native macOS front-end that bundles the exporter CLI,
+an application icon, and an ad-hoc signature into an application you can put in
+Applications or Launchpad:
+
+```zsh
+./ui/build-app.sh
+cp -R "output/iMessage Exporter.app" /Applications/
+```
+
+The app defaults to its bundled CLI. Grant the app Full Disk Access if macOS
+does not allow it to read your local Messages database.
+
 ## Library
 
 The `imessage_database` library provides models that allow us to access iMessage information as native, cross-platform data structures.
