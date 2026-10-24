@@ -82,8 +82,19 @@ fn attachment_files(
     attachment_root: &Path,
     export_path: &Path,
 ) -> Result<Vec<ManifestFile>, RuntimeError> {
-    if !attachment_root.exists() {
-        return Ok(Vec::new());
+    let metadata = match fs::symlink_metadata(attachment_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(RuntimeError::DiskError(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "attachment archive root must be a directory, not a symlink: {}",
+                attachment_root.display()
+            ),
+        )));
     }
 
     let mut paths = Vec::new();
@@ -186,5 +197,17 @@ mod tests {
             manifest["attachments"]["files"][0]["sha256"],
             "46a072ffae872e7f69b3a25152f8685d2762232422df6cd5ecac2787d8ab6e63"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_rejects_a_symlinked_attachment_root() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), temp.path().join("attachments")).unwrap();
+
+        assert!(write_manifest(temp.path(), "html", &AttachmentManagerMode::Clone, 0, 0).is_err());
     }
 }

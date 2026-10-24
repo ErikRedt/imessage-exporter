@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 // MARK: Mode
 /// Attachment handling mode.
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AttachmentManagerMode {
     /// Do not copy attachments.
     #[default]

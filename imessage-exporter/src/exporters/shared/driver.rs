@@ -266,13 +266,7 @@ where
             let filename = match state.route.get(&chatroom_rowid) {
                 Some(name) => name.clone(),
                 None => {
-                    let mut name = config.filename(chatroom);
-                    // The root HTML index is a reserved archive entry point.
-                    // Preserve a conversation named "index" instead of letting
-                    // the index overwrite its transcript at teardown.
-                    if W::LABEL == "html" && name.eq_ignore_ascii_case("index.html") {
-                        name = "index conversation.html".to_string();
-                    }
+                    let name = reserve_output_filename(W::LABEL, config.filename(chatroom));
                     state.route.insert(chatroom_rowid, name.clone());
                     name
                 }
@@ -312,6 +306,18 @@ where
             state.record_rendered_message(&filename, message, config);
             orphaned_writer(state)
         }
+    }
+}
+
+/// Avoid filenames the exporter creates independently of a conversation.
+fn reserve_output_filename(label: &str, name: String) -> String {
+    let orphaned = format!("{ORPHANED}.{label}");
+    let is_reserved = name.eq_ignore_ascii_case(&orphaned)
+        || (label == "html" && name.eq_ignore_ascii_case("index.html"));
+    if is_reserved {
+        format!("conversation - {name}")
+    } else {
+        name
     }
 }
 
@@ -425,29 +431,36 @@ where
     if let Some(notice) = W::footer_notice() {
         eprintln!("{notice}");
     }
-    let config = writer.config();
-    let state = writer.state_mut();
-    for file in state.files.values_mut() {
-        W::write_file_footer(file)?;
-        // Surface flush errors (disk full, quota, unmount, NFS hiccup) here
-        // rather than letting `BufWriter::Drop` discard them silently.
-        file.flush()?;
-    }
-    let orphaned = orphaned_writer(state)?;
-    W::write_file_footer(orphaned)?;
-    orphaned.flush()?;
+    let (export_path, attachment_mode, failures, missing_attachments) = {
+        let config = writer.config();
+        let state = writer.state_mut();
+        for file in state.files.values_mut() {
+            W::write_file_footer(file)?;
+            // Surface flush errors (disk full, quota, unmount, NFS hiccup) here
+            // rather than letting `BufWriter::Drop` discard them silently.
+            file.flush()?;
+        }
+        let orphaned = orphaned_writer(state)?;
+        W::write_file_footer(orphaned)?;
+        orphaned.flush()?;
 
-    // Stamp only after every footer write and checked flush succeeds.
-    state.finish(config);
-    let failures = failures + state.errors.get();
-    write_manifest(
-        &config.options.export_path,
-        W::LABEL,
-        &config.options.attachment_manager.mode,
-        failures,
-        state.missing_attachment_count(),
-    )?;
+        // Stamp only after every footer write and checked flush succeeds.
+        state.finish(config);
+        (
+            config.options.export_path.clone(),
+            config.options.attachment_manager.mode,
+            failures + state.errors.get(),
+            state.missing_attachment_count(),
+        )
+    };
     writer.finish_export(failures)?;
+    write_manifest(
+        &export_path,
+        W::LABEL,
+        &attachment_mode,
+        failures,
+        missing_attachments,
+    )?;
     if failures > 0 {
         return Err(RuntimeError::IncompleteExport(failures));
     }
@@ -470,6 +483,24 @@ mod tests {
         app::{export_type::ExportType, runtime::ORPHANED},
         exporters::shared::driver::run_export,
     };
+
+    use super::reserve_output_filename;
+
+    #[test]
+    fn reserves_generated_transcript_filenames() {
+        assert_eq!(
+            reserve_output_filename("html", "index.html".to_string()),
+            "conversation - index.html"
+        );
+        assert_eq!(
+            reserve_output_filename("html", "orphaned.html".to_string()),
+            "conversation - orphaned.html"
+        );
+        assert_eq!(
+            reserve_output_filename("txt", "orphaned.txt".to_string()),
+            "conversation - orphaned.txt"
+        );
+    }
 
     /// Whole Unix seconds, so no assertion can trip over a filesystem that
     /// truncates sub-second precision.

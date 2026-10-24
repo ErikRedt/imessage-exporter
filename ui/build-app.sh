@@ -6,9 +6,6 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 APP_NAME="iMessage Exporter.app"
 OUTPUT=${1:-"$ROOT/output/$APP_NAME"}
 APP="$OUTPUT"
-TEMP=$(mktemp -d "${TMPDIR:-/tmp}/imessage-exporter-app.XXXXXX")
-trap 'rm -rf "$TEMP"' EXIT HUP INT TERM
-
 case "$APP" in
     *.app) ;;
     *) echo "Output path must end in .app" >&2; exit 2 ;;
@@ -16,7 +13,7 @@ esac
 
 mkdir -p "$(dirname "$APP")"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$TEMP/AppIcon.iconset"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "Building exporter CLI..."
 cargo build --release --manifest-path "$ROOT/Cargo.toml" -p imessage-exporter
@@ -26,14 +23,10 @@ swiftc -O -o "$APP/Contents/MacOS/imessage-exporter-ui" "$ROOT/ui/main.swift"
 cp "$ROOT/target/release/imessage-exporter" "$APP/Contents/MacOS/imessage-exporter"
 cp "$ROOT/ui/Info.plist" "$APP/Contents/Info.plist"
 
-for size in 16 32 128 256 512; do
-    /usr/bin/sips -s format png -z "$size" "$size" "$ROOT/ui/Resources/AppIcon.svg" \
-        --out "$TEMP/AppIcon.iconset/icon_${size}x${size}.png" >/dev/null
-    double=$((size * 2))
-    /usr/bin/sips -s format png -z "$double" "$double" "$ROOT/ui/Resources/AppIcon.svg" \
-        --out "$TEMP/AppIcon.iconset/icon_${size}x${size}@2x.png" >/dev/null
-done
-/usr/bin/iconutil -c icns "$TEMP/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
+# Keep the supported raster assets in the repository. `sips` cannot rasterize
+# SVG consistently on the macOS releases this bundle supports.
+/usr/bin/iconutil -c icns "$ROOT/ui/Resources/AppIcon.iconset" \
+    -o "$APP/Contents/Resources/AppIcon.icns"
 
 # An ad-hoc signature makes the bundle internally consistent while leaving
 # distribution signing and notarization to a release workflow.
