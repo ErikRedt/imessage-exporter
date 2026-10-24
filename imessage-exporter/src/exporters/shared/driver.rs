@@ -1,7 +1,7 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{
-        HashMap,
+        HashMap, HashSet,
         hash_map::Entry::{Occupied, Vacant},
     },
     fs::File,
@@ -19,7 +19,10 @@ use crate::{
     },
     exporters::{
         formatter::{MessageFormatter, RenderContext},
-        shared::date_span::{DateSpan, Timestamp},
+        shared::{
+            date_span::{DateSpan, Timestamp},
+            manifest::write_manifest,
+        },
     },
 };
 
@@ -33,6 +36,8 @@ const FILE_BUFFER_CAPACITY: usize = 64 * 1024;
 /// format-specific hooks declared on [`MessageWriter`].
 pub struct ExportState {
     pub errors: Cell<u64>,
+    /// Distinct database attachment rows that could not be prepared for export.
+    missing_attachments: RefCell<HashSet<i32>>,
     /// One open [`BufWriter`] per resolved chat filename.
     pub files: HashMap<String, BufWriter<File>>,
     /// Cache each chat's resolved filename by chat rowid
@@ -70,6 +75,7 @@ impl ExportState {
         let pb_enabled = config.options.show_progress && stderr().is_terminal();
         Ok(Self {
             errors: Cell::new(0),
+            missing_attachments: RefCell::new(HashSet::new()),
             files: HashMap::new(),
             route: HashMap::new(),
             orphaned: Some(BufWriter::with_capacity(FILE_BUFFER_CAPACITY, file)),
@@ -78,6 +84,18 @@ impl ExportState {
             spans: HashMap::new(),
             orphaned_span: None,
         })
+    }
+
+    /// Record a database attachment that could not be copied or resolved.
+    /// A message can reference the same row more than once, so use a set to
+    /// keep the manifest's missing count meaningful.
+    pub fn record_missing_attachment(&self, rowid: i32) {
+        self.missing_attachments.borrow_mut().insert(rowid);
+    }
+
+    /// Count distinct attachment rows that failed preparation.
+    fn missing_attachment_count(&self) -> u64 {
+        self.missing_attachments.borrow().len() as u64
     }
 
     /// Widen the chat file's span to cover `at`, allocating the key only the
@@ -371,6 +389,13 @@ where
     // Stamp only after every footer write and checked flush succeeds.
     state.finish(config);
     let failures = failures + state.errors.get();
+    write_manifest(
+        &config.options.export_path,
+        W::LABEL,
+        &config.options.attachment_manager.mode,
+        failures,
+        state.missing_attachment_count(),
+    )?;
     if failures > 0 {
         return Err(RuntimeError::IncompleteExport(failures));
     }

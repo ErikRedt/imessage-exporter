@@ -4,6 +4,7 @@ pub(crate) mod balloon;
 pub(crate) mod date_span;
 pub(crate) mod driver;
 pub(crate) mod edited;
+pub(crate) mod manifest;
 pub(crate) mod message;
 pub(crate) mod part;
 pub(crate) mod render;
