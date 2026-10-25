@@ -29,6 +29,15 @@ final class ExporterUI: NSObject, NSApplicationDelegate, NSComboBoxDataSource {
     private var process: Process?
     private var chats: [Chat] = []
 
+    /// Prefer the CLI carried by the app bundle. Development builds still fall
+    /// back to the command-line name so `open-ui.sh` remains convenient.
+    private func bundledBinaryPath() -> String? {
+        let path = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/MacOS/imessage-exporter")
+            .path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+
     /// Resolve the CLI binary: an absolute path is used as-is; a bare name is
     /// looked up on PATH (via `which`). Returns nil when not found.
     private func resolveBinary(_ value: String) -> String? {
@@ -110,7 +119,9 @@ final class ExporterUI: NSObject, NSApplicationDelegate, NSComboBoxDataSource {
         window.minSize = NSSize(width: 640, height: 560)
 
         // Controls
-        binaryPath.stringValue = defaults.string(forKey: "binaryPath") ?? "imessage-exporter"
+        binaryPath.stringValue = defaults.string(forKey: "binaryPath")
+            ?? bundledBinaryPath()
+            ?? "imessage-exporter"
         binaryPath.toolTip = "Path to the imessage-exporter CLI binary, or just its name if it is on PATH"
         exportPath.stringValue = defaults.string(forKey: "exportPath")
             ?? NSHomeDirectory() + "/imessage_export"
